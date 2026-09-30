@@ -22,8 +22,6 @@ Formula language supported (value strings starting with "="):
         'SHEET NAME'!@T1.B9.value1 -> same, any in-sheet reference form after the '!'
     literals: numbers, "quoted strings"
 Anything not starting with "=" is a literal ("-" or "" = empty, "???" = missing input).
-Row option "merge_cells": "B6:C6" (or a list) merges those Excel cells in the .xlsx, only if
-no value would be hidden - otherwise the merge is skipped and the reason goes in column G.
 """
 import json, csv, re, math
 from pathlib import Path
@@ -329,31 +327,6 @@ class ExcelFormula(Parser):
             return self.resolve(val)                 # bare cell ref like D7
         raise CalcError(f"Unexpected token {val!r}")
 
-def merge_if_empty(ws, rng, shift, input_cells=()):
-    """Merge Excel range `rng` (e.g. "B6:C6", rows as in the JSON, moved down by `shift`) only when
-    every cell except the top-left is empty ("-" counts as empty) and is not a yellow input cell.
-    Returns None when merged, otherwise the reason it was skipped."""
-    from openpyxl.utils import range_boundaries
-    try:
-        c1, r1, c2, r2 = range_boundaries(str(rng))
-    except (ValueError, TypeError):
-        return f"merge {rng!r} skipped: not a cell range"
-    if None in (c1, r1, c2, r2):                          # whole rows/columns like "B:C"
-        return f"merge {rng!r} skipped: not a cell range"
-    r1, r2 = r1 + shift, r2 + shift
-    for m in ws.merged_cells.ranges:
-        if not (m.max_col < c1 or m.min_col > c2 or m.max_row < r1 or m.min_row > r2):
-            return f"merge {rng} skipped: overlaps merged {m.coord}"
-    hidden = [ws.cell(row=y, column=x) for y in range(r1, r2 + 1) for x in range(c1, c2 + 1)
-              if (y, x) != (r1, c1)]
-    full = [c.coordinate for c in hidden if c.value not in (None, "", "-") or c.coordinate in input_cells]
-    if full:
-        return f"merge {rng} skipped: would hide {', '.join(full)}"
-    for c in hidden:
-        c.value = None                                   # only "-" placeholders are cleared
-    ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
-    return None
-
 # ---------------- workbook evaluator ----------------
 class Workbook:
     def __init__(self, tables, inputs=None, linked=None):
@@ -657,7 +630,6 @@ class Workbook:
                         c.value, c.font = h, bold
                         if line == first - 1:
                             c.fill = head_fill
-                input_cells = set()                  # yellow "???" cells - never hidden by a merge
                 for r in t["rows"]:
                     line = int(r["id"][1:]) + shift
                     ws[f"B{line}"], ws[f"C{line}"], ws[f"F{line}"] = r.get("description"), r.get("unit1", r.get("unit")), r.get("unit2")
@@ -677,7 +649,6 @@ class Workbook:
                                 notes.append(f"{key}: formula not converted ({e})")
                         elif isinstance(raw, str) and raw.strip() == "???":
                             cell.fill = input_fill           # missing input - type it in Excel
-                            input_cells.add(cell.coordinate)
                         elif raw not in (None, "-", ""):
                             try:
                                 cell.value = float(raw) if isinstance(raw, str) else raw
@@ -689,15 +660,6 @@ class Workbook:
                         ws[f"G{line}"] = "; ".join(notes) or r.get("notes")
                         if notes:
                             ws[f"G{line}"].font = err_font
-                # ---- "merge_cells": "B6:C6" (or a list) - merged only if no value would be hidden
-                for r in t["rows"]:
-                    spec = r.get("merge_cells")
-                    for rng in [spec] if isinstance(spec, str) else spec or []:
-                        skipped = merge_if_empty(ws, rng, shift, input_cells)
-                        if skipped:
-                            g_cell = ws[f"G{int(r['id'][1:]) + shift}"]
-                            g_cell.value = "; ".join(x for x in (g_cell.value, skipped) if x)
-                            g_cell.font = err_font
                 for col, w in zip("ABCDEFG", [3, 36, 12, 16, 16, 12, 60]):
                     ws.column_dimensions[col].width = w
         enq.column_dimensions["A"].width, enq.column_dimensions["B"].width = 40, 20
