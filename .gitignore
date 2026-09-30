@@ -1,0 +1,15 @@
+# Inputs: calc sheets, lookup tables and enquiry sheets
+json/
+enquiry/
+
+# Outputs written by the calc engines
+*_computed.json
+*_computed.csv
+*_computed.xlsx
+
+# Excel lock files (created while a workbook is open)
+~$*
+
+# Python cache
+__pycache__/
+*.pyc
